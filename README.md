@@ -60,13 +60,13 @@ pip install -r requirements.txt
 ### Basic OWASP assessment
 
 ```bash
-python3 red_alert_cli.py example.com --owasp
+python3 red_alert.py example.com --owasp
 ```
 
 ### Generate detailed HTML report
 
 ```bash
-python3 red_alert_cli.py example.com --owasp -o report.html -f html
+python3 red_alert.py example.com --owasp -o report.html -f html
 ```
 
 ### Note
