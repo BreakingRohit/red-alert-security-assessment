@@ -926,7 +926,7 @@ def print_banner():
 """
     print(banner)
     print(f"{Fore.YELLOW}🚨 Enhanced Vulnerability Scanner for Cybersecurity Professionals{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}🇮🇳 Made by Rohit Kol for Ethical Hackers & Bug Bounty Hunters{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}🇮🇳 Made for Ethical Hackers & Bug Bounty Hunters{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}Version 2.0.0 : OWASP Detection + Exploit Listing{Style.RESET_ALL}")
     print("=" * 80)
 
